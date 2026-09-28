@@ -64,6 +64,7 @@ if prompt := st.chat_input("의사 선생님께 물어볼 내용을 입력하세
             # 생성된 AI 답변을 대화 기록에 저장
             st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-        except Exception:
-            # API 요청 실패 등 오류 발생 시 빨간 오류 창 대신 사용자 친화적 한국어 안내 문구 출력
+except Exception as e:
+            # 원인 파악을 위해 에러 내용 함께 출력
+            st.error(f"오류 상세 내용: {e}")
             st.warning("의사 선생님과 연결 중에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.")
