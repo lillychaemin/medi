@@ -14,7 +14,7 @@ if "CLAUDE_API_KEY" not in st.secrets:
 
 client = Anthropic(api_key=st.secrets["CLAUDE_API_KEY"])
 
-# 2. 의사 선생님 페르소나 설정 (Anthropic SDK에서는 system 매개변수로 따로 전달합니다)
+# 2. 의사 선생님 페르소나 설정
 SYSTEM_PROMPT = "너는 환자에게 설명하는 친절한 의 선생님이야. 어려운 말은 쉬운 말로 바꿔 주고, 반드시 순수 한국어로만 답해"
 
 # 3. 대화 내역 초기화
@@ -35,9 +35,9 @@ if prompt := st.chat_input("의사 선생님께 물어볼 내용을 입력하세
 
     with st.chat_message("assistant"):
         try:
-            # Anthropic 스트리밍 API 호출
+            # Anthropic 스트리밍 API 호출 (최신 모델명 적용)
             with client.messages.stream(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-5",  # 메일 안내에 따라 모델명 변경
                 max_tokens=1000,
                 system=SYSTEM_PROMPT,
                 messages=st.session_state.messages
