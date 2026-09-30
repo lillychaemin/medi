@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide",
 )
 
-DATA_FILE = "1.병원정보서비스(2026.6.)(1).xlsx"
+DATA_FILE = "1.병원정보서비스(2026.6.).xlsx"
 GEOJSON_URL = (
     "https://raw.githubusercontent.com/KnellBalm/kr-admin-geojson/main/sig.geojson"
 )
