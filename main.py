@@ -13,8 +13,8 @@ st.set_page_config(
 )
 
 # GitHub에 업로드한 CSV 파일의 Raw URL로 바꾸세요.
-# 예: https://raw.githubusercontent.com/사용자이름/저장소이름/main/data/hospital_202606.csv
-DATA_URL = "https://raw.githubusercontent.com/사용자이름/저장소이름/main/data/hospital_202606.csv"
+# CSV가 저장소 최상위(루트)에 있으므로 /data/를 넣지 않습니다.
+DATA_URL = "https://raw.githubusercontent.com/lillychaemin/medi/main/hospital_202606.csv"
 GEOJSON_URL = (
     "https://raw.githubusercontent.com/KnellBalm/kr-admin-geojson/main/sig.geojson"
 )
@@ -131,13 +131,6 @@ def format_number(value) -> str:
 # ---------------------------------------------------------------------
 # 데이터 읽기
 # ---------------------------------------------------------------------
-if "사용자이름" in DATA_URL or "저장소이름" in DATA_URL:
-    st.error(
-        "main.py의 DATA_URL을 본인의 GitHub CSV Raw URL로 바꿔 주세요. "
-        "파일은 저장소의 data/hospital_202606.csv 경로에 업로드하면 됩니다."
-    )
-    st.stop()
-
 try:
     hospitals = load_hospitals(DATA_URL)
 except Exception as e:
