@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -13,7 +12,9 @@ st.set_page_config(
     layout="wide",
 )
 
-DATA_FILE = "1.병원정보서비스(2026.6.).xlsx"
+# GitHub에 업로드한 CSV 파일의 Raw URL로 바꾸세요.
+# 예: https://raw.githubusercontent.com/사용자이름/저장소이름/main/data/hospital_202606.csv
+DATA_URL = "https://raw.githubusercontent.com/사용자이름/저장소이름/main/data/hospital_202606.csv"
 GEOJSON_URL = (
     "https://raw.githubusercontent.com/KnellBalm/kr-admin-geojson/main/sig.geojson"
 )
@@ -28,10 +29,10 @@ COLORS = [
 ]
 
 
-@st.cache_data
-def load_hospitals(file_path: str) -> pd.DataFrame:
-    """2026년 6월 병원정보서비스 엑셀을 읽습니다."""
-    df = pd.read_excel(file_path, engine="openpyxl")
+@st.cache_data(show_spinner="GitHub에서 의료기관 CSV를 불러오는 중...")
+def load_hospitals(data_url: str) -> pd.DataFrame:
+    """GitHub Raw URL에서 2026년 6월 의료기관 CSV를 읽습니다."""
+    df = pd.read_csv(data_url, encoding="utf-8-sig", low_memory=False)
 
     required = [
         "요양기관명",
@@ -43,7 +44,7 @@ def load_hospitals(file_path: str) -> pd.DataFrame:
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"엑셀에 필요한 열이 없습니다: {', '.join(missing)}")
+        raise ValueError(f"CSV에 필요한 열이 없습니다: {', '.join(missing)}")
 
     # 코드가 숫자로 읽혀도 앞자리 0이 사라지지 않도록 문자열로 통일
     df["시도코드"] = (
@@ -130,17 +131,20 @@ def format_number(value) -> str:
 # ---------------------------------------------------------------------
 # 데이터 읽기
 # ---------------------------------------------------------------------
-if not Path(DATA_FILE).exists():
+if "사용자이름" in DATA_URL or "저장소이름" in DATA_URL:
     st.error(
-        f"**{DATA_FILE}** 파일을 찾을 수 없습니다. "
-        "main.py와 같은 폴더에 엑셀 파일을 넣어 주세요."
+        "main.py의 DATA_URL을 본인의 GitHub CSV Raw URL로 바꿔 주세요. "
+        "파일은 저장소의 data/hospital_202606.csv 경로에 업로드하면 됩니다."
     )
     st.stop()
 
 try:
-    hospitals = load_hospitals(DATA_FILE)
+    hospitals = load_hospitals(DATA_URL)
 except Exception as e:
-    st.error(f"엑셀 파일을 읽는 중 오류가 발생했습니다: {e}")
+    st.error(
+        "GitHub Raw URL에서 CSV를 읽지 못했습니다. DATA_URL이 올바른지, "
+        f"저장소와 파일이 공개되어 있는지 확인해 주세요.\n\n오류: {e}"
+    )
     st.stop()
 
 
@@ -337,4 +341,3 @@ st.caption(
     "행정구역 경계: kr-admin-geojson 시군구 GeoJSON "
     "(국가공간정보포털/V-World 기반)."
 )
-
