@@ -127,17 +127,30 @@ def normalize_sgg_name(value) -> str:
 
 
 def sgg_aliases(value) -> list[str]:
-    """도시 이름이 앞에 붙은 구 명칭도 연결할 수 있도록 별칭을 만듭니다."""
+    """시군구명 표기 차이를 흡수하되, 시도 키와 함께 비교할 별칭을 만듭니다."""
     name = normalize_sgg_name(value)
     aliases = [name]
-    # 예: 대구동구 -> 동구, 고양덕양구 -> 덕양구
-    # 시도까지 함께 비교하므로 동일한 구 이름의 다른 시도와 혼동하지 않습니다.
+
+    # CSV에서 시 이름이 시군구명에 중복된 표기: 대구대구서구/대구서구,
+    # 인천인천동구, 부산부산서구 등. 시도도 함께 비교하므로 다른 시도의
+    # 같은 이름과 잘못 연결되지 않습니다.
+    for city in ("부천", "화성", "대구", "인천", "부산", "광주", "대전", "울산"):
+        if name.startswith(city) and len(name) > len(city):
+            aliases.append(name[len(city):])
+
+    # 구 이름 앞에 도시명이 붙은 경우(예: 부천소사구, 화성동탄구)도
+    # 짧은 구 이름으로 비교합니다. 다만 실제 경계 feature가 있어야 연결됩니다.
     if name.endswith("구"):
         for i in range(1, len(name) - 1):
             suffix = name[i:]
             if suffix.endswith("구") and len(suffix) >= 2:
                 aliases.append(suffix)
-    return list(dict.fromkeys(aliases))
+
+    # 세종은 시군구 레벨 데이터에서 세종시/세종특별자치시로 다르게 표기될 수 있습니다.
+    if name in {"세종", "세종시", "세종특별자치시"}:
+        aliases.extend(["세종", "세종시", "세종특별자치시"])
+
+    return list(dict.fromkeys(a for a in aliases if a))
 
 
 def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
@@ -176,7 +189,7 @@ def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
         sido_keys = {sido}
         # 2026년 7월 경계의 통합 시도는 2026년 6월 CSV의 광주·전남과
         # 모두 연결될 수 있도록 양쪽 이름을 별칭으로 등록합니다.
-        sido_compact = re.sub(r"\\s+", "", str(sido_raw))
+        sido_compact = re.sub(r"\s+", "", str(sido_raw))
         if "전남광주" in sido_compact:
             sido_keys.update({"전남", "광주"})
 
@@ -365,8 +378,9 @@ if info["matched"] == 0:
 elif info.get("unmatched"):
     with st.expander(f"경계 데이터와 이름이 달라 연결되지 않은 지역 {len(info['unmatched'])}곳 확인"):
         st.caption(
-            "일부 지역은 행정구역 개편 또는 명칭 차이 때문에 현재 GeoJSON과 연결되지 않을 수 있습니다. "
-            "아래 지역의 경계가 GeoJSON에 없는 경우 최신 시군구 경계 파일이 필요합니다."
+            "지역명 별칭을 적용한 뒤에도 연결되지 않은 항목입니다. 실제 GeoJSON에 해당 경계가 있는지, "
+            "그리고 GeoJSON의 sidonm/sggnm 속성명이 예상과 같은지 확인해야 합니다. "
+            "경계 자체가 없으면 이 코드만으로 해당 지역의 경계를 만들 수 없습니다."
         )
         st.write(" · ".join(info["unmatched"][:80]))
 
