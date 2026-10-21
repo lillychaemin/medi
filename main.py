@@ -249,7 +249,30 @@ def assign_geo_ids(hospitals: pd.DataFrame, geojson: dict) -> tuple[pd.DataFrame
                 result.iat[row_idx, result.columns.get_loc("geo_id")] = hit
                 coordinate_matches += 1
 
-    # 좌표가 없거나 경계 밖인 기관은 시도·시군구 이름이 유일하게 일치할 때만 보완합니다.
+    # 좌표가 없거나 경계 밖인 기관은 먼저 주소의 동 이름으로 행정구역 개편을 보완합니다.
+    # 2026-07 인천 서구 개편: 석남동은 서해구 관할입니다.
+    address_col = next(
+        (c for c in ("주소", "소재지주소", "요양기관주소", "주소(도로명)") if c in result.columns),
+        None,
+    )
+    if address_col:
+        for row_idx in result.index[result["geo_id"].isna()]:
+            row = result.loc[row_idx]
+            sido = normalize_sido_name(row.get("시도코드명", ""))
+            old_sgg = normalize_sgg_name(row.get("시군구코드명", ""))
+            address = re.sub(r"\s+", "", str(row.get(address_col, "") or ""))
+            target_sgg = None
+
+            # 해당 누락 기관: 인천 서구 석남동 → 개편 후 인천 서해구
+            if sido == "인천" and "서구" in old_sgg and "석남동" in address:
+                target_sgg = "서해구"
+
+            if target_sgg:
+                found = alias_lookup.get((sido, normalize_sgg_name(target_sgg)), set())
+                if len(found) == 1:
+                    result.at[row_idx, "geo_id"] = next(iter(found))
+
+    # 그 밖의 좌표 누락 기관은 시도·시군구 이름이 유일하게 일치할 때만 보완합니다.
     for row_idx in result.index[result["geo_id"].isna()]:
         row = result.loc[row_idx]
         sido = normalize_sido_name(row.get("시도코드명", ""))
