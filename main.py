@@ -1,10 +1,13 @@
 import json
 import re
+from numbers import Integral
 from urllib.request import Request, urlopen
 
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+from shapely.geometry import Point, shape
+from shapely.strtree import STRtree
 
 
 st.set_page_config(
@@ -153,129 +156,149 @@ def sgg_aliases(value) -> list[str]:
     return list(dict.fromkeys(a for a in aliases if a))
 
 
-def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
-    """2026년 7월 시군구 GeoJSON과 CSV를 지역명으로 연결합니다."""
-    result = json.loads(json.dumps(geojson))
-    features = result.get("features", [])
+def _feature_sido_and_name(props: dict) -> tuple[str, str]:
+    """GeoJSON의 다양한 속성명에서 시도명과 시군구명을 추출합니다."""
+    full = str(props.get("FULL_NM") or props.get("full_nm") or "").strip()
+    sido = (
+        props.get("sidonm") or props.get("SIDO_NM") or props.get("CTP_KOR_NM")
+        or props.get("ctp_kor_nm") or props.get("sido_nm") or ""
+    )
+    sgg = (
+        props.get("sggnm") or props.get("SIG_KOR_NM") or props.get("sig_kor_nm")
+        or props.get("SIG_NM") or props.get("sgg_nm") or props.get("name") or ""
+    )
+    if full:
+        parts = full.split()
+        if not sido and parts:
+            sido = parts[0]
+        if not sgg and parts:
+            sgg = parts[-1]
+    return str(sido).strip(), str(sgg).strip()
 
-    alias_by_sido = {}
-    alias_global = {}
-    feature_by_id = {}
 
+def assign_geo_ids(hospitals: pd.DataFrame, geojson: dict) -> tuple[pd.DataFrame, list[str], int]:
+    """기관 좌표를 시군구 폴리곤에 공간 연결합니다. 명칭 차이와 경계 개편에 강합니다."""
+    from shapely.geometry import Point, shape
+    from shapely.strtree import STRtree
+    from numbers import Integral
+
+    features = geojson.get("features", [])
+    polygons, feature_ids, geom_identity = [], [], {}
+    alias_lookup = {}
     for idx, feature in enumerate(features):
         props = feature.setdefault("properties", {})
-        fid = str(idx)
-        feature_by_id[fid] = feature
-
-        full_raw = str(props.get("FULL_NM") or "").strip()
-        sido_raw = (
-            props.get("sidonm") or props.get("SIDO_NM") or
-            props.get("CTP_KOR_NM") or props.get("sido_nm") or ""
-        )
-        sgg_raw = (
-            props.get("sggnm") or props.get("SIG_KOR_NM") or
-            props.get("SIG_NM") or props.get("sgg_nm") or props.get("name") or ""
-        )
-        if full_raw and not sido_raw:
-            sido_raw = full_raw.split()[0]
-        if full_raw and not sgg_raw:
-            sgg_raw = full_raw.split()[-1]
-        if not full_raw:
-            full_raw = f"{sido_raw} {sgg_raw}".strip()
-
-        props["FULL_NM"] = full_raw
-        props["_map_id"] = fid
-        sido = normalize_sido_name(sido_raw)
-        sido_keys = {sido}
-        # 2026년 7월 경계의 통합 시도는 2026년 6월 CSV의 광주·전남과
-        # 모두 연결될 수 있도록 양쪽 이름을 별칭으로 등록합니다.
-        sido_compact = re.sub(r"\s+", "", str(sido_raw))
-        if "전남광주" in sido_compact:
-            sido_keys.update({"전남", "광주"})
-
-        names = [sgg_raw]
-        if full_raw:
-            parts = full_raw.split()
-            names.append(parts[-1])
-            if len(parts) >= 2:
-                names.append("".join(parts[-2:]))
-
-        for name in names:
+        sido_raw, sgg_raw = _feature_sido_and_name(props)
+        full = str(props.get("FULL_NM") or props.get("full_nm") or "").strip()
+        if not full:
+            full = f"{sido_raw} {sgg_raw}".strip()
+        props["FULL_NM"] = full or sgg_raw or f"시군구 {idx}"
+        feature_id = str(idx)
+        try:
+            polygon = shape(feature["geometry"])
+        except Exception:
+            continue
+        if polygon.is_empty:
+            continue
+        polygons.append(polygon)
+        feature_ids.append(feature_id)
+        geom_identity.setdefault(id(polygon), []).append(len(polygons) - 1)
+        sido_key = normalize_sido_name(sido_raw)
+        for name in [sgg_raw, full.split()[-1] if full.split() else ""]:
             for alias in sgg_aliases(name):
-                for sido_key in sido_keys:
-                    alias_by_sido.setdefault((sido_key, alias), set()).add(fid)
-                alias_global.setdefault(alias, set()).add(fid)
+                alias_lookup.setdefault((sido_key, alias), set()).add(feature_id)
+        # 통합 시도명과 구 데이터의 광주·전남을 함께 검색할 수 있게 별칭 처리
+        if "전남광주" in re.sub(r"\s+", "", sido_raw):
+            for name in [sgg_raw, full.split()[-1] if full.split() else ""]:
+                for alias in sgg_aliases(name):
+                    alias_lookup.setdefault(("광주", alias), set()).add(feature_id)
+                    alias_lookup.setdefault(("전남", alias), set()).add(feature_id)
 
-    mapped_counts = {}
-    unmatched = []
+    if not polygons:
+        raise ValueError("GeoJSON에서 유효한 시군구 경계 폴리곤을 찾지 못했습니다.")
+    tree = STRtree(polygons)
+    x_col = next((c for c in ("좌표(X)", "경도", "longitude", "lon", "X") if c in hospitals.columns), None)
+    y_col = next((c for c in ("좌표(Y)", "위도", "latitude", "lat", "Y") if c in hospitals.columns), None)
+    result = hospitals.copy()
+    result["geo_id"] = None
+    coordinate_matches = 0
 
-    for row in counts.itertuples(index=False):
-        sido_raw = getattr(row, "시도코드명")
-        sgg_name = getattr(row, "시군구코드명")
-        sido = normalize_sido_name(sido_raw)
+    if x_col and y_col:
+        xs = pd.to_numeric(result[x_col], errors="coerce")
+        ys = pd.to_numeric(result[y_col], errors="coerce")
+        for row_idx, (x, y) in enumerate(zip(xs, ys)):
+            if pd.isna(x) or pd.isna(y) or not (-180 <= x <= 180 and -90 <= y <= 90):
+                continue
+            point = Point(float(x), float(y))
+            candidates = tree.query(point)
+            hit = None
+            for candidate in candidates:
+                if isinstance(candidate, Integral):  # Shapely 2.x returns indices
+                    poly_idx = int(candidate)
+                else:  # Shapely 1.x returns geometry objects
+                    matches = geom_identity.get(id(candidate), [])
+                    if not matches:
+                        # Fallback for geometry objects whose Python identity was not retained
+                        matches = [i for i, poly in enumerate(polygons) if poly.equals(candidate)]
+                    if not matches:
+                        continue
+                    poly_idx = matches[0]
+                if polygons[poly_idx].covers(point):
+                    hit = feature_ids[poly_idx]
+                    break
+            if hit is not None:
+                result.iat[row_idx, result.columns.get_loc("geo_id")] = hit
+                coordinate_matches += 1
+
+    # 좌표가 없거나 경계 밖인 기관은 시도·시군구 이름이 유일하게 일치할 때만 보완합니다.
+    for row_idx in result.index[result["geo_id"].isna()]:
+        row = result.loc[row_idx]
+        sido = normalize_sido_name(row.get("시도코드명", ""))
+        sgg = row.get("시군구코드명", "")
         candidates = set()
-
-        # 먼저 시도와 시군구가 모두 일치하는 경우를 찾습니다.
-        for alias in sgg_aliases(sgg_name):
-            found = alias_by_sido.get((sido, alias), set())
+        for alias in sgg_aliases(sgg):
+            found = alias_lookup.get((sido, alias), set())
             if len(found) == 1:
                 candidates = found
                 break
-
-        # 2026년 7월 경계는 광주·전남 통합 시도를 사용하므로,
-        # 과거 CSV의 시도명이 다를 때는 전역에서 유일한 이름만 연결합니다.
-        if not candidates:
-            for alias in sgg_aliases(sgg_name):
-                found = alias_global.get(alias, set())
-                if len(found) == 1:
-                    candidates = found
-                    break
-
-        # '광주동구'처럼 시 이름이 구 이름 앞에 붙은 데이터 처리
-        if not candidates:
-            compact = normalize_sgg_name(sgg_name)
-            for city in ("광주", "부산", "대구", "인천", "대전", "울산", "세종"):
-                if compact.startswith(city) and len(compact) > len(city):
-                    tail = compact[len(city):]
-                    possible = set()
-                    for alias in sgg_aliases(tail):
-                        possible |= alias_global.get(alias, set())
-                    possible = {
-                        fid for fid in possible
-                        if city in str(feature_by_id[fid]["properties"].get("FULL_NM", ""))
-                        or (city == "광주" and "전남광주" in str(
-                            feature_by_id[fid]["properties"].get("FULL_NM", "")
-                        ))
-                    }
-                    if len(possible) == 1:
-                        candidates = possible
-                        break
-
         if len(candidates) == 1:
-            fid = next(iter(candidates))
-            mapped_counts[fid] = mapped_counts.get(fid, 0) + int(
-                getattr(row, "의료기관수")
-            )
-        else:
-            unmatched.append(f"{sido_raw} {sgg_name}")
+            result.at[row_idx, "geo_id"] = next(iter(candidates))
+
+    missing_rows = result[result["geo_id"].isna()]
+    unmatched = sorted(set(
+        f"{row.get('시도코드명', '')} {row.get('시군구코드명', '')}"
+        for _, row in missing_rows.iterrows()
+    ))
+    return result, unmatched, coordinate_matches
+
+
+def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
+    """GeoJSON feature index 기준 집계값을 붙이고 단계별 색상을 지정합니다."""
+    result = json.loads(json.dumps(geojson))
+    features = result.get("features", [])
+    mapped_counts = {}
+    for row in counts.itertuples(index=False):
+        geo_id = str(getattr(row, "geo_id"))
+        mapped_counts[geo_id] = int(getattr(row, "의료기관수"))
 
     mapped_series = pd.Series(mapped_counts, dtype="int64")
     class_map = make_bins(mapped_series).to_dict() if not mapped_series.empty else {}
-
-    for fid, feature in feature_by_id.items():
-        props = feature["properties"]
-        count = int(mapped_counts.get(fid, 0))
-        level = int(class_map.get(fid, 0))
+    for idx, feature in enumerate(features):
+        props = feature.setdefault("properties", {})
+        geo_id = str(idx)
+        # feature 순서에 대응하는 내부 ID를 생성해 공간 연결 결과와 결합합니다.
+        count = int(mapped_counts.get(geo_id, 0))
+        level = int(class_map.get(geo_id, 0))
         props["의료기관수"] = count
         props["단계"] = level
-        props["fill_color"] = (
-            COLORS[level - 1] if 1 <= level <= 5 else [235, 235, 235, 120]
-        )
-
+        props["fill_color"] = COLORS[level - 1] if 1 <= level <= 5 else [235, 235, 235, 120]
+        sido_raw, sgg_raw = _feature_sido_and_name(props)
+        full = str(props.get("FULL_NM") or "").strip()
+        if not full:
+            props["FULL_NM"] = f"{sido_raw} {sgg_raw}".strip() or f"시군구 {idx}"
     return result, {
         "matched": len(mapped_counts),
         "total_geo": len(features),
-        "unmatched": sorted(set(unmatched)),
+        "unmatched": [],
         "mapped_regions": len(mapped_counts),
     }
 
@@ -293,6 +316,13 @@ except Exception as e:
         "GitHub Raw URL에서 CSV를 읽지 못했습니다. DATA_URL이 올바른지, "
         f"저장소와 파일이 공개되어 있는지 확인해 주세요.\n\n오류: {e}"
     )
+    st.stop()
+
+try:
+    geojson = load_geojson()
+    hospitals, unmatched_institutions, coordinate_matches = assign_geo_ids(hospitals, geojson)
+except Exception as e:
+    st.error(f"행정경계와 의료기관 좌표를 연결하지 못했습니다. GeoJSON 속성 및 좌표계를 확인해 주세요.\n\n오류: {e}")
     st.stop()
 
 
@@ -340,17 +370,15 @@ with st.sidebar:
 # 시군구별 집계
 # ---------------------------------------------------------------------
 counts = (
-    filtered.groupby(
-        ["시도코드", "시도코드명", "시군구코드", "시군구코드명"],
-        as_index=False,
-    )
+    filtered.dropna(subset=["geo_id"])
+    .groupby("geo_id", as_index=False)
     .size()
     .rename(columns={"size": "의료기관수"})
 )
 
 # 전체 의료기관 수
 total_count = len(filtered)
-sgg_count = len(counts)
+sgg_count = int(filtered["geo_id"].dropna().nunique())
 
 col1, col2, col3 = st.columns(3)
 col1.metric("의료기관 수", format_number(total_count) + "개")
@@ -361,28 +389,22 @@ col3.metric("원자료 기관 수", format_number(len(hospitals)) + "개")
 # 지도
 # ---------------------------------------------------------------------
 try:
-    geojson = load_geojson()
     map_geojson, info = build_map_geojson(geojson, counts)
 except Exception as e:
-    st.error(
-        "시군구 경계 GeoJSON을 불러오지 못했습니다. "
-        f"인터넷 연결 또는 GeoJSON 주소를 확인해 주세요.\n\n{e}"
-    )
+    st.error(f"지도 경계에 집계값을 연결하지 못했습니다.\n\n오류: {e}")
     st.stop()
 
-if info["matched"] == 0:
-    st.warning(
-        "CSV와 GeoJSON의 지역을 이름으로 연결하지 못했습니다. "
-        "GeoJSON의 SIDO_NM/SIG_KOR_NM/FULL_NM 필드와 데이터의 시도·시군구 명칭을 확인해 주세요."
-    )
-elif info.get("unmatched"):
-    with st.expander(f"경계 데이터와 이름이 달라 연결되지 않은 지역 {len(info['unmatched'])}곳 확인"):
+if unmatched_institutions:
+    with st.expander(f"좌표 또는 이름으로 경계를 찾지 못한 기관의 지역 {len(unmatched_institutions)}곳 확인"):
         st.caption(
-            "지역명 별칭을 적용한 뒤에도 연결되지 않은 항목입니다. 실제 GeoJSON에 해당 경계가 있는지, "
-            "그리고 GeoJSON의 sidonm/sggnm 속성명이 예상과 같은지 확인해야 합니다. "
-            "경계 자체가 없으면 이 코드만으로 해당 지역의 경계를 만들 수 없습니다."
+            f"좌표를 통해 경계에 연결한 기관 수: {coordinate_matches:,}개. "
+            "아래 지역은 좌표가 없거나 경계와 일치하지 않아 이름으로도 유일하게 연결되지 않았습니다."
         )
-        st.write(" · ".join(info["unmatched"][:80]))
+        st.write(" · ".join(unmatched_institutions[:80]))
+
+if filtered["geo_id"].isna().any():
+    missing_n = int(filtered["geo_id"].isna().sum())
+    st.warning(f"현재 필터에서 경계에 연결되지 않은 기관 {missing_n:,}개는 지도 집계에서 제외됩니다. 원자료 표에는 포함된 기관 수와 지도 집계 수가 다를 수 있습니다.")
 
 layer = pdk.Layer(
     "GeoJsonLayer",
@@ -466,26 +488,20 @@ if not counts.empty:
 # 시군구별 표
 # ---------------------------------------------------------------------
 with st.expander("📊 시군구별 의료기관 수 표 보기"):
-    table = counts[
-        ["시도코드명", "시군구코드명", "의료기관수"]
-    ].sort_values("의료기관수", ascending=False)
-
-    table = table.rename(
-        columns={
-            "시도코드명": "시도",
-            "시군구코드명": "시군구",
-            "의료기관수": "의료기관 수",
-        }
-    )
-
+    geo_rows = []
+    for idx, feature in enumerate(map_geojson.get("features", [])):
+        props = feature.get("properties", {})
+        geo_rows.append({
+            "시군구": props.get("FULL_NM", f"시군구 {idx}"),
+            "의료기관 수": int(props.get("의료기관수", 0)),
+        })
+    table = pd.DataFrame(geo_rows).sort_values("의료기관 수", ascending=False)
     st.dataframe(
         table,
         width="stretch",
         hide_index=True,
         column_config={
-            "의료기관 수": st.column_config.NumberColumn(
-                "의료기관 수", format="%d개"
-            )
+            "의료기관 수": st.column_config.NumberColumn("의료기관 수", format="%d개")
         },
     )
 
