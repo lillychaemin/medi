@@ -398,9 +398,27 @@ if unmatched_institutions:
     with st.expander(f"좌표 또는 이름으로 경계를 찾지 못한 기관의 지역 {len(unmatched_institutions)}곳 확인"):
         st.caption(
             f"좌표를 통해 경계에 연결한 기관 수: {coordinate_matches:,}개. "
-            "아래 지역은 좌표가 없거나 경계와 일치하지 않아 이름으로도 유일하게 연결되지 않았습니다."
+            "아래 지역은 좌표가 없거나 경계와 일치하지 않아 이름으로도 유일하게 연결되지 않았습니다. "
+            "특히 행정구역이 분리·개편된 지역은 기관 주소를 확인해야 정확히 배정할 수 있습니다."
         )
         st.write(" · ".join(unmatched_institutions[:80]))
+
+        # 누락된 행의 기관명·주소를 보여 주어 수동 확인 또는 주소 기반 보완이 가능하도록 함
+        missing_detail_cols = [
+            c for c in [
+                "요양기관명", "종별코드명", "시도코드명", "시군구코드명",
+                "주소", "소재지주소", "요양기관주소", "주소(도로명)",
+                "좌표(X)", "좌표(Y)",
+            ] if c in hospitals.columns
+        ]
+        missing_details = hospitals[hospitals["geo_id"].isna()]
+        if missing_detail_cols and not missing_details.empty:
+            st.markdown("**경계에 연결되지 않은 기관 상세 정보**")
+            st.dataframe(
+                missing_details[missing_detail_cols],
+                width="stretch",
+                hide_index=True,
+            )
 
 if filtered["geo_id"].isna().any():
     missing_n = int(filtered["geo_id"].isna().sum())
