@@ -1,4 +1,5 @@
 import json
+import re
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -88,39 +89,129 @@ def make_bins(counts: pd.Series) -> pd.Series:
     return classes.clip(1, 5).astype(int)
 
 
-def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
-    """GeoJSON과 집계 결과를 시군구 코드로 결합합니다."""
-    count_map = dict(zip(counts["시군구코드"], counts["의료기관수"]))
+def normalize_sido_name(value) -> str:
+    """CSV와 GeoJSON의 시도 명칭을 공통 키로 정규화합니다."""
+    name = re.sub(r"\s+", "", str(value or ""))
+    rules = [
+        ("서울", ("서울",)),
+        ("부산", ("부산",)),
+        ("대구", ("대구",)),
+        ("인천", ("인천",)),
+        ("광주", ("광주",)),
+        ("대전", ("대전",)),
+        ("울산", ("울산",)),
+        ("세종", ("세종",)),
+        ("경기", ("경기",)),
+        ("강원", ("강원",)),
+        ("충북", ("충북", "충청북")),
+        ("충남", ("충남", "충청남")),
+        ("전북", ("전북", "전라북")),
+        ("전남", ("전남", "전라남")),
+        ("경북", ("경북", "경상북")),
+        ("경남", ("경남", "경상남")),
+        ("제주", ("제주",)),
+    ]
+    for key, prefixes in rules:
+        if any(name.startswith(prefix) for prefix in prefixes):
+            return key
+    return name
 
-    # 지도에 표시되는 통계의 최대/최소 및 단계 계산
-    values = counts["의료기관수"].astype(int)
-    if len(values) > 0:
-        tmp = counts.copy()
-        tmp["단계"] = make_bins(tmp["의료기관수"])
-        class_map = dict(zip(tmp["시군구코드"], tmp["단계"]))
+
+def normalize_sgg_name(value) -> str:
+    """시군구 명칭의 공백과 '고양시 덕양구' 같은 표기 차이를 정리합니다."""
+    name = re.sub(r"\s+", "", str(value or ""))
+    # 예: 고양시덕양구 -> 고양덕양구, 전주시덕진구 -> 전주덕진구
+    name = re.sub(r"시(?=[가-힣]+[구군]$)", "", name)
+    return name
+
+
+def sgg_aliases(value) -> list[str]:
+    """도시 이름이 앞에 붙은 구 명칭도 연결할 수 있도록 별칭을 만듭니다."""
+    name = normalize_sgg_name(value)
+    aliases = [name]
+    # 예: 대구동구 -> 동구, 고양덕양구 -> 덕양구
+    # 시도까지 함께 비교하므로 동일한 구 이름의 다른 시도와 혼동하지 않습니다.
+    if name.endswith("구"):
+        for i in range(1, len(name) - 1):
+            suffix = name[i:]
+            if suffix.endswith("구") and len(suffix) >= 2:
+                aliases.append(suffix)
+    return list(dict.fromkeys(aliases))
+
+
+def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
+    """서로 다른 코드 체계 대신 시도·시군구 명칭을 정규화해 집계값을 연결합니다."""
+    result = json.loads(json.dumps(geojson))
+    features = result.get("features", [])
+
+    # (정규화된 시도, 시군구 별칭) -> GeoJSON SIG_CD 후보 목록
+    alias_to_codes = {}
+    feature_by_code = {}
+    for feature in features:
+        props = feature.setdefault("properties", {})
+        code = str(props.get("SIG_CD", "")).strip()
+        if not code:
+            continue
+        feature_by_code[code] = feature
+        sido = normalize_sido_name(
+            props.get("SIDO_NM") or props.get("CTP_KOR_NM") or
+            str(props.get("FULL_NM", "")).split()[0]
+        )
+        names = [props.get("SIG_KOR_NM", "")]
+        full_name = str(props.get("FULL_NM", "")).strip()
+        if full_name:
+            names.append(full_name.split()[-1])
+            # FULL_NM의 마지막 두 행정단위(예: '고양시 덕양구')도 후보로 사용
+            parts = full_name.split()
+            if len(parts) >= 2:
+                names.append("".join(parts[-2:]))
+        for name in names:
+            for alias in sgg_aliases(name):
+                alias_to_codes.setdefault((sido, alias), set()).add(code)
+
+    # 각 CSV 집계 행을 이름으로 GeoJSON 코드에 연결합니다.
+    mapped_counts = {}
+    unmatched = []
+    for row in counts.itertuples(index=False):
+        # counts 컬럼 순서: 시도코드, 시도코드명, 시군구코드, 시군구코드명, 의료기관수
+        sido = normalize_sido_name(getattr(row, "시도코드명"))
+        sgg_name = getattr(row, "시군구코드명")
+        candidates = set()
+        for alias in sgg_aliases(sgg_name):
+            found = alias_to_codes.get((sido, alias), set())
+            if len(found) == 1:
+                candidates = found
+                break
+        if len(candidates) == 1:
+            code = next(iter(candidates))
+            mapped_counts[code] = mapped_counts.get(code, 0) + int(getattr(row, "의료기관수"))
+        else:
+            unmatched.append(f"{getattr(row, '시도코드명')} {sgg_name}")
+
+    # 지도 색상 단계를 GeoJSON 지역 코드 기준으로 다시 계산합니다.
+    mapped_series = pd.Series(mapped_counts, dtype="int64")
+    if not mapped_series.empty:
+        class_series = make_bins(mapped_series)
+        class_map = class_series.to_dict()
     else:
         class_map = {}
 
-    result = json.loads(json.dumps(geojson))
     matched = 0
-
-    for feature in result.get("features", []):
-        props = feature.setdefault("properties", {})
-        code = str(props.get("SIG_CD", "")).strip().zfill(5)
-
-        count = int(count_map.get(code, 0))
+    for code, feature in feature_by_code.items():
+        props = feature["properties"]
+        count = int(mapped_counts.get(code, 0))
         level = int(class_map.get(code, 0))
-
         props["의료기관수"] = count
         props["단계"] = level
         props["fill_color"] = COLORS[level - 1] if 1 <= level <= 5 else [235, 235, 235, 120]
-
-        if code in count_map:
+        if code in mapped_counts:
             matched += 1
 
     return result, {
         "matched": matched,
-        "total_geo": len(result.get("features", [])),
+        "total_geo": len(features),
+        "unmatched": unmatched,
+        "mapped_regions": len(mapped_counts),
     }
 
 
@@ -217,9 +308,16 @@ except Exception as e:
 
 if info["matched"] == 0:
     st.warning(
-        "엑셀의 시군구 코드와 GeoJSON의 시군구 코드가 일치하지 않아 "
-        "지도에 집계값을 연결하지 못했습니다."
+        "CSV와 GeoJSON의 지역을 이름으로 연결하지 못했습니다. "
+        "GeoJSON의 SIDO_NM/SIG_KOR_NM/FULL_NM 필드와 데이터의 시도·시군구 명칭을 확인해 주세요."
     )
+elif info.get("unmatched"):
+    with st.expander(f"경계 데이터와 이름이 달라 연결되지 않은 지역 {len(info['unmatched'])}곳 확인"):
+        st.caption(
+            "일부 지역은 행정구역 개편 또는 명칭 차이 때문에 현재 GeoJSON과 연결되지 않을 수 있습니다. "
+            "아래 지역의 경계가 GeoJSON에 없는 경우 최신 시군구 경계 파일이 필요합니다."
+        )
+        st.write(" · ".join(info["unmatched"][:80]))
 
 layer = pdk.Layer(
     "GeoJsonLayer",
