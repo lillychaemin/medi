@@ -16,8 +16,9 @@ st.set_page_config(
 # GitHub에 업로드한 CSV 파일의 Raw URL로 바꾸세요.
 # CSV가 저장소 최상위(루트)에 있으므로 /data/를 넣지 않습니다.
 DATA_URL = "https://raw.githubusercontent.com/lillychaemin/medi/main/hospital_202606.csv"
+# 2026-07 기준 최신 시군구 경계(256개, 전남광주 통합 반영)
 GEOJSON_URL = (
-    "https://raw.githubusercontent.com/KnellBalm/kr-admin-geojson/main/sig.geojson"
+    "https://raw.githubusercontent.com/DevMinGeonPark/mapcn-kr/main/data/sgg.json"
 )
 
 # 단계구분도에 사용할 색상: 연한 색 → 진한 색
@@ -140,80 +141,130 @@ def sgg_aliases(value) -> list[str]:
 
 
 def build_map_geojson(geojson: dict, counts: pd.DataFrame) -> tuple[dict, dict]:
-    """서로 다른 코드 체계 대신 시도·시군구 명칭을 정규화해 집계값을 연결합니다."""
+    """2026년 7월 시군구 GeoJSON과 CSV를 지역명으로 연결합니다."""
     result = json.loads(json.dumps(geojson))
     features = result.get("features", [])
 
-    # (정규화된 시도, 시군구 별칭) -> GeoJSON SIG_CD 후보 목록
-    alias_to_codes = {}
-    feature_by_code = {}
-    for feature in features:
+    alias_by_sido = {}
+    alias_global = {}
+    feature_by_id = {}
+
+    for idx, feature in enumerate(features):
         props = feature.setdefault("properties", {})
-        code = str(props.get("SIG_CD", "")).strip()
-        if not code:
-            continue
-        feature_by_code[code] = feature
-        sido = normalize_sido_name(
-            props.get("SIDO_NM") or props.get("CTP_KOR_NM") or
-            str(props.get("FULL_NM", "")).split()[0]
+        fid = str(idx)
+        feature_by_id[fid] = feature
+
+        full_raw = str(props.get("FULL_NM") or "").strip()
+        sido_raw = (
+            props.get("sidonm") or props.get("SIDO_NM") or
+            props.get("CTP_KOR_NM") or props.get("sido_nm") or ""
         )
-        names = [props.get("SIG_KOR_NM", "")]
-        full_name = str(props.get("FULL_NM", "")).strip()
-        if full_name:
-            names.append(full_name.split()[-1])
-            # FULL_NM의 마지막 두 행정단위(예: '고양시 덕양구')도 후보로 사용
-            parts = full_name.split()
+        sgg_raw = (
+            props.get("sggnm") or props.get("SIG_KOR_NM") or
+            props.get("SIG_NM") or props.get("sgg_nm") or props.get("name") or ""
+        )
+        if full_raw and not sido_raw:
+            sido_raw = full_raw.split()[0]
+        if full_raw and not sgg_raw:
+            sgg_raw = full_raw.split()[-1]
+        if not full_raw:
+            full_raw = f"{sido_raw} {sgg_raw}".strip()
+
+        props["FULL_NM"] = full_raw
+        props["_map_id"] = fid
+        sido = normalize_sido_name(sido_raw)
+        sido_keys = {sido}
+        # 2026년 7월 경계의 통합 시도는 2026년 6월 CSV의 광주·전남과
+        # 모두 연결될 수 있도록 양쪽 이름을 별칭으로 등록합니다.
+        sido_compact = re.sub(r"\\s+", "", str(sido_raw))
+        if "전남광주" in sido_compact:
+            sido_keys.update({"전남", "광주"})
+
+        names = [sgg_raw]
+        if full_raw:
+            parts = full_raw.split()
+            names.append(parts[-1])
             if len(parts) >= 2:
                 names.append("".join(parts[-2:]))
+
         for name in names:
             for alias in sgg_aliases(name):
-                alias_to_codes.setdefault((sido, alias), set()).add(code)
+                for sido_key in sido_keys:
+                    alias_by_sido.setdefault((sido_key, alias), set()).add(fid)
+                alias_global.setdefault(alias, set()).add(fid)
 
-    # 각 CSV 집계 행을 이름으로 GeoJSON 코드에 연결합니다.
     mapped_counts = {}
     unmatched = []
+
     for row in counts.itertuples(index=False):
-        # counts 컬럼 순서: 시도코드, 시도코드명, 시군구코드, 시군구코드명, 의료기관수
-        sido = normalize_sido_name(getattr(row, "시도코드명"))
+        sido_raw = getattr(row, "시도코드명")
         sgg_name = getattr(row, "시군구코드명")
+        sido = normalize_sido_name(sido_raw)
         candidates = set()
+
+        # 먼저 시도와 시군구가 모두 일치하는 경우를 찾습니다.
         for alias in sgg_aliases(sgg_name):
-            found = alias_to_codes.get((sido, alias), set())
+            found = alias_by_sido.get((sido, alias), set())
             if len(found) == 1:
                 candidates = found
                 break
+
+        # 2026년 7월 경계는 광주·전남 통합 시도를 사용하므로,
+        # 과거 CSV의 시도명이 다를 때는 전역에서 유일한 이름만 연결합니다.
+        if not candidates:
+            for alias in sgg_aliases(sgg_name):
+                found = alias_global.get(alias, set())
+                if len(found) == 1:
+                    candidates = found
+                    break
+
+        # '광주동구'처럼 시 이름이 구 이름 앞에 붙은 데이터 처리
+        if not candidates:
+            compact = normalize_sgg_name(sgg_name)
+            for city in ("광주", "부산", "대구", "인천", "대전", "울산", "세종"):
+                if compact.startswith(city) and len(compact) > len(city):
+                    tail = compact[len(city):]
+                    possible = set()
+                    for alias in sgg_aliases(tail):
+                        possible |= alias_global.get(alias, set())
+                    possible = {
+                        fid for fid in possible
+                        if city in str(feature_by_id[fid]["properties"].get("FULL_NM", ""))
+                        or (city == "광주" and "전남광주" in str(
+                            feature_by_id[fid]["properties"].get("FULL_NM", "")
+                        ))
+                    }
+                    if len(possible) == 1:
+                        candidates = possible
+                        break
+
         if len(candidates) == 1:
-            code = next(iter(candidates))
-            mapped_counts[code] = mapped_counts.get(code, 0) + int(getattr(row, "의료기관수"))
+            fid = next(iter(candidates))
+            mapped_counts[fid] = mapped_counts.get(fid, 0) + int(
+                getattr(row, "의료기관수")
+            )
         else:
-            unmatched.append(f"{getattr(row, '시도코드명')} {sgg_name}")
+            unmatched.append(f"{sido_raw} {sgg_name}")
 
-    # 지도 색상 단계를 GeoJSON 지역 코드 기준으로 다시 계산합니다.
     mapped_series = pd.Series(mapped_counts, dtype="int64")
-    if not mapped_series.empty:
-        class_series = make_bins(mapped_series)
-        class_map = class_series.to_dict()
-    else:
-        class_map = {}
+    class_map = make_bins(mapped_series).to_dict() if not mapped_series.empty else {}
 
-    matched = 0
-    for code, feature in feature_by_code.items():
+    for fid, feature in feature_by_id.items():
         props = feature["properties"]
-        count = int(mapped_counts.get(code, 0))
-        level = int(class_map.get(code, 0))
+        count = int(mapped_counts.get(fid, 0))
+        level = int(class_map.get(fid, 0))
         props["의료기관수"] = count
         props["단계"] = level
-        props["fill_color"] = COLORS[level - 1] if 1 <= level <= 5 else [235, 235, 235, 120]
-        if code in mapped_counts:
-            matched += 1
+        props["fill_color"] = (
+            COLORS[level - 1] if 1 <= level <= 5 else [235, 235, 235, 120]
+        )
 
     return result, {
-        "matched": matched,
+        "matched": len(mapped_counts),
         "total_geo": len(features),
-        "unmatched": unmatched,
+        "unmatched": sorted(set(unmatched)),
         "mapped_regions": len(mapped_counts),
     }
-
 
 def format_number(value) -> str:
     return f"{int(value):,}"
@@ -429,6 +480,6 @@ with st.expander("📊 시군구별 의료기관 수 표 보기"):
 # ---------------------------------------------------------------------
 st.caption(
     "의료기관 원자료: 건강보험심사평가원 병원정보서비스(2026년 6월). "
-    "행정구역 경계: kr-admin-geojson 시군구 GeoJSON "
-    "(국가공간정보포털/V-World 기반)."
+    "행정구역 경계: mapcn-kr 시군구 GeoJSON "
+    "(통계청 SGIS·행정안전부 자료, 2026년 7월 기준; CC BY 4.0)."
 )
