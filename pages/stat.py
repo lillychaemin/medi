@@ -4,31 +4,67 @@ import numpy as np
 import plotly.express as px
 
 # ==============================================================================
-# 1. 페이지 기본 설정 및 타이틀
+# 1. 페이지 기본 설정 및 병원풍 커스텀 디자인(CSS) 적용
 # ==============================================================================
-# 웹 브라우저 탭의 제목과 레이아웃을 넓게(wide) 설정합니다.
 st.set_page_config(
-    page_title="감염병 통계 대시보드",
-    page_icon="🦠",
+    page_title="메디컬 감염병 통계 대시보드",
+    page_icon="🏥",
     layout="wide"
 )
 
-st.title("🦠 대한민국 감염병 발생 통계 대시보드")
-st.markdown("제공된 월별 및 연도별 데이터를 바탕으로 감염병 발생 현황을 분석하고 시각화합니다.")
+# 병원 환경을 연상시키는 깔끔하고 세련된 스타일 (소프트 블루/그린 톤, 카드형 UI)
+st.markdown("""
+    <style>
+    /* 전체 배경색 및 폰트 변경 */
+    .stApp {
+        background-color: #F8FAFC;
+    }
+    
+    /* 사이드바 배경 스타일 */
+    [data-testid="stSidebar"] {
+        background-color: #F1F5F9;
+        border-right: 1px solid #E2E8F0;
+    }
+    
+    /* 메인 타이틀 스타일 */
+    h1 {
+        color: #0F172A;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+    
+    /* 탭 메뉴 스타일링 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #E2E8F0;
+        border-radius: 6px 6px 0px 0px;
+        color: #334155;
+        font-weight: 600;
+        padding: 10px 20px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #0284C7 !important;
+        color: white !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("🏥 메디컬 감염병 통합 관리 대시보드")
+st.markdown("데이터 기반의 체계적인 감염병 발생 현황 분석 및 시각화 시스템입니다.")
 st.markdown("---")
 
 # ==============================================================================
 # 2. 데이터 불러오기 함수
 # ==============================================================================
-# @st.cache_data를 사용하여 데이터를 매번 다시 읽지 않고 메모리에 저장(캐싱)하여 속도를 높입니다.
 @st.cache_data
 def load_data():
-    # CSV 파일을 읽어옵니다. (파일명이 변경된 경우 아래 이름을 수정해주세요)
+    # CSV 파일을 읽어옵니다. (기존 파일명 호환성 유지)
     try:
         df_monthly = pd.read_csv('infectious_disease_monthly_clean_2.csv')
         df_annual = pd.read_csv('infectious_disease_annual_clean_2.csv')
     except FileNotFoundError:
-        # 파일명이 혹시 _2가 없는 기본 이름일 경우를 대비한 예외 처리입니다.
         df_monthly = pd.read_csv('infectious_disease_monthly_clean.csv')
         df_annual = pd.read_csv('infectious_disease_annual_clean.csv')
     
@@ -36,7 +72,7 @@ def load_data():
     df_monthly['발생건수'] = df_monthly['발생건수'].fillna(0)
     df_annual['발생건수'] = df_annual['발생건수'].fillna(0)
     
-    # 날짜 형태로 변환하여 시계열 그래프를 그릴 때 사용합니다. (예: 2020년 1월 -> 2020-01-01)
+    # 날짜 형태로 변환하여 시계열 그래프를 그릴 때 사용합니다.
     df_monthly['연월'] = pd.to_datetime(
         df_monthly['연도'].astype(str) + '-' + df_monthly['월'].astype(str).str.zfill(2) + '-01'
     )
@@ -49,13 +85,12 @@ df_monthly, df_annual = load_data()
 # ==============================================================================
 # 3. 사이드바 필터 (사용자가 선택하는 메뉴)
 # ==============================================================================
-st.sidebar.header("🔍 데이터 필터링")
+st.sidebar.header("🔍 검색 및 필터 조건")
 
 # 1) 코로나19 포함 여부 선택
-# 코로나19의 수치가 매우 커서 다른 질병 그래프가 묻히는 것을 방지하기 위한 토글 옵션입니다.
 include_covid = st.sidebar.checkbox("코로나바이러스감염증-19 데이터 포함", value=True)
 
-# 2) 감염병급 선택 (예: 제1급, 2급, 3급)
+# 2) 감염병급 선택
 available_classes = sorted(df_monthly['감염병급'].dropna().unique().tolist())
 selected_classes = st.sidebar.multiselect(
     "감염병급 선택",
@@ -102,7 +137,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 주요 요약", "📈 시계열 분석",
 with tab1:
     st.subheader("📌 핵심 요약 지표")
     
-    # 주요 숫자를 계산합니다.
     total_cases = int(filtered_annual['발생건수'].sum())
     
     if not filtered_annual.empty and total_cases > 0:
@@ -115,7 +149,6 @@ with tab1:
         
     disease_type_count = filtered_annual[filtered_annual['발생건수'] > 0]['감염병명'].nunique()
     
-    # 3개 컬럼으로 숫자를 강조하여 보여줍니다.
     col1, col2, col3 = st.columns(3)
     col1.metric("총 발생 건수", f"{total_cases:,} 건")
     col2.metric("최다 발생 감염병", top_disease_name, f"{top_disease_count:,} 건")
@@ -123,7 +156,6 @@ with tab1:
     
     st.markdown("---")
     
-    # 차트 2개를 양쪽에 배치합니다.
     col_left, col_right = st.columns(2)
     
     with col_left:
@@ -136,7 +168,6 @@ with tab1:
             .head(10)
         )
         
-        # 바 차트 그리기
         fig_top10 = px.bar(
             top10_df,
             x='발생건수',
@@ -144,7 +175,7 @@ with tab1:
             orientation='h',
             text_auto=',.0f',
             color='발생건수',
-            color_continuous_scale='Blues',
+            color_continuous_scale='Teal',
             labels={'발생건수': '발생 건수', '감염병명': '감염병 이름'}
         )
         fig_top10.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
@@ -154,13 +185,12 @@ with tab1:
         st.markdown("##### 🏷️ 감염병급별 발생 비중")
         class_summary = filtered_annual.groupby('감염병급')['발생건수'].sum().reset_index()
         
-        # 원형(파이) 차트 그리기
         fig_pie = px.pie(
             class_summary,
             names='감염병급',
             values='발생건수',
             hole=0.4,
-            color_discrete_sequence=px.colors.qualitative.Set2
+            color_discrete_sequence=px.colors.qualitative.Safe
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -170,10 +200,8 @@ with tab1:
 with tab2:
     st.subheader("📈 시간 흐름에 따른 발생 추이")
     
-    # 월별 합계 데이터 생성
     monthly_trend = filtered_monthly.groupby('연월')['발생건수'].sum().reset_index()
     
-    # 선 그래프 그리기
     fig_line = px.line(
         monthly_trend,
         x='연월',
@@ -182,12 +210,11 @@ with tab2:
         title="전체 월별 감염병 발생 건수 추이",
         labels={'연월': '년-월', '발생건수': '발생 건수'}
     )
-    fig_line.update_traces(line_color='#E74C3C', line_width=2)
+    fig_line.update_traces(line_color='#0284C7', line_width=2.5)
     st.plotly_chart(fig_line, use_container_width=True)
     
     st.markdown("---")
     
-    # 연도 및 월별 계절성 히트맵
     st.subheader("🗓️ 연도별 · 월별 발생 히트맵 (계절성 확인)")
     pivot_df = filtered_monthly.pivot_table(
         index='연도', 
@@ -201,7 +228,7 @@ with tab2:
         labels=dict(x="월", y="연도", color="발생 건수"),
         x=pivot_df.columns,
         y=pivot_df.index,
-        color_continuous_scale='YlOrRd',
+        color_continuous_scale='Blues',
         aspect="auto"
     )
     st.plotly_chart(fig_heatmap, use_container_width=True)
@@ -212,10 +239,7 @@ with tab2:
 with tab3:
     st.subheader("🔬 특정 감염병 선택 및 비교 분석")
     
-    # 사용자가 선택할 수 있는 감염병 목록
     disease_options = sorted(filtered_monthly['감염병명'].unique().tolist())
-    
-    # 기본 선택값 설정 (최대 3개)
     default_selected = disease_options[:3] if len(disease_options) >= 3 else disease_options
     
     selected_diseases = st.multiselect(
@@ -225,11 +249,9 @@ with tab3:
     )
     
     if selected_diseases:
-        # 선택한 질병 데이터만 추출
         compare_monthly = filtered_monthly[filtered_monthly['감염병명'].isin(selected_diseases)]
         compare_annual = filtered_annual[filtered_annual['감염병명'].isin(selected_diseases)]
         
-        # 월별 추이 비교 그래프
         fig_compare_line = px.line(
             compare_monthly,
             x='연월',
@@ -241,7 +263,6 @@ with tab3:
         )
         st.plotly_chart(fig_compare_line, use_container_width=True)
         
-        # 연도별 합계 비교 바 차트
         fig_compare_bar = px.bar(
             compare_annual,
             x='연도',
@@ -274,7 +295,6 @@ with tab4:
         
     st.dataframe(display_df, use_container_width=True)
     
-    # CSV 파일로 다운로드 기능
     csv_data = display_df.to_csv(index=False).encode('utf-8-sig')
     st.download_button(
         label="📥 현재 조회 중인 데이터 CSV로 다운로드",
