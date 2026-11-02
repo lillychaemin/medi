@@ -805,11 +805,12 @@ st.title("🏥 전국 의료기관 현황 지도")
 st.caption("2026년 6월 병원정보서비스 기준 · 시군구별 의료기관 수 단계구분도")
 
 # ---------------------------------------------------------------------
-# 필터
+# 필터 (사이드바)
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.header("🔎 지도 필터")
 
+    # 1. 시도 필터
     sido_options = ["전체"] + sorted(hospitals["시도코드명"].dropna().unique().tolist())
     selected_sido = st.selectbox("시도", sido_options)
 
@@ -818,13 +819,15 @@ with st.sidebar:
     if selected_sido != "전체":
         filtered = filtered[filtered["시도코드명"] == selected_sido]
 
-    # [추가] 선택된 시도에 맞는 시군구 목록 동적 생성
+    # 2. 시군구 필터
     sgg_options = ["전체"] + sorted(filtered["시군구코드명"].dropna().unique().tolist())
     selected_sgg = st.selectbox("시군구", sgg_options)
 
+    # ⭐ [핵심] 이 코드가 누락되어 있는지 확인하세요!
     if selected_sgg != "전체":
         filtered = filtered[filtered["시군구코드명"] == selected_sgg]
 
+    # 3. 의료기관 종류 필터
     type_options = ["전체"] + sorted(
         filtered["종별코드명"].dropna().unique().tolist()
     )
@@ -832,18 +835,7 @@ with st.sidebar:
 
     if selected_type != "전체":
         filtered = filtered[filtered["종별코드명"] == selected_type]
-
-    st.divider()
-    st.markdown(
-        """
-        **지도 읽는 법**
-
-        연한 색 → 의료기관 수가 적은 시군구  
-        진한 색 → 의료기관 수가 많은 시군구
-
-        *단계는 현재 필터 조건에 따라 상대적으로 구분됩니다.*
-        """
-    )
+        
 # ---------------------------------------------------------------------
 # 시군구별 집계
 # ---------------------------------------------------------------------
