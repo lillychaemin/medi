@@ -818,6 +818,13 @@ with st.sidebar:
     if selected_sido != "전체":
         filtered = filtered[filtered["시도코드명"] == selected_sido]
 
+    # [추가] 선택된 시도에 맞는 시군구 목록 동적 생성
+    sgg_options = ["전체"] + sorted(filtered["시군구코드명"].dropna().unique().tolist())
+    selected_sgg = st.selectbox("시군구", sgg_options)
+
+    if selected_sgg != "전체":
+        filtered = filtered[filtered["시군구코드명"] == selected_sgg]
+
     type_options = ["전체"] + sorted(
         filtered["종별코드명"].dropna().unique().tolist()
     )
@@ -837,7 +844,6 @@ with st.sidebar:
         *단계는 현재 필터 조건에 따라 상대적으로 구분됩니다.*
         """
     )
-
 # ---------------------------------------------------------------------
 # 시군구별 집계
 # ---------------------------------------------------------------------
