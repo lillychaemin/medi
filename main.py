@@ -404,7 +404,9 @@ with st.sidebar:
         """
     )
 
+# ---------------------------------------------------------------------
 # 시군구별 집계
+# ---------------------------------------------------------------------
 counts = (
     filtered.dropna(subset=["geo_id"])
     .groupby("geo_id", as_index=False)
@@ -415,11 +417,19 @@ counts = (
 total_count = len(filtered)
 sgg_count = int(filtered["geo_id"].dropna().nunique())
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3 = st.cols(3)
 col1.metric("의료기관 수", format_number(total_count) + "개")
 col2.metric("표시 시군구", format_number(sgg_count) + "곳")
 col3.metric("원자료 기관 수", format_number(len(hospitals)) + "개")
 
+# 🔍 [디버깅용 추가] 현재 화면에 매칭된 시군구 이름 확인하기
+if not counts.empty:
+    matched_sgg_names = [
+        map_geojson["features"][int(gid)]["properties"].get("FULL_NM", "")
+        for gid in counts["geo_id"]
+    ]
+    st.caption(f"인식된 시군구 목록: {', ' .join(matched_sgg_names)}")
+    
 # ---------------------------------------------------------------------
 # 지도 생성
 # ---------------------------------------------------------------------
