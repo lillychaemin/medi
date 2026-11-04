@@ -805,12 +805,12 @@ st.title("🏥 전국 의료기관 현황 지도")
 st.caption("2026년 6월 병원정보서비스 기준 · 시군구별 의료기관 수 단계구분도")
 
 # ---------------------------------------------------------------------
-# 필터 (사이드바)
+# 1. 사이드바 필터 (이 부분이 정확히 들어가 있는지 확인하세요!)
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.header("🔎 지도 필터")
 
-    # 1. 시도 필터
+    # 시도 선택
     sido_options = ["전체"] + sorted(hospitals["시도코드명"].dropna().unique().tolist())
     selected_sido = st.selectbox("시도", sido_options)
 
@@ -819,15 +819,15 @@ with st.sidebar:
     if selected_sido != "전체":
         filtered = filtered[filtered["시도코드명"] == selected_sido]
 
-    # 2. 시군구 필터
+    # 시군구 선택 (시도가 필터링된 기준으로 생성)
     sgg_options = ["전체"] + sorted(filtered["시군구코드명"].dropna().unique().tolist())
     selected_sgg = st.selectbox("시군구", sgg_options)
 
-    # ⭐ [핵심] 이 코드가 누락되어 있는지 확인하세요!
+    # ⭐ [매우 중요] 이 코드가 빠져있으면 시군구를 골라도 전체가 나옵니다!
     if selected_sgg != "전체":
         filtered = filtered[filtered["시군구코드명"] == selected_sgg]
 
-    # 3. 의료기관 종류 필터
+    # 의료기관 종류 선택
     type_options = ["전체"] + sorted(
         filtered["종별코드명"].dropna().unique().tolist()
     )
@@ -835,9 +835,18 @@ with st.sidebar:
 
     if selected_type != "전체":
         filtered = filtered[filtered["종별코드명"] == selected_type]
-        
+
+    st.divider()
+    st.markdown(
+        """
+        **지도 읽는 법**
+        연한 색 → 의료기관 수가 적은 시군구  
+        진한 색 → 의료기관 수가 많은 시군구
+        """
+    )
+
 # ---------------------------------------------------------------------
-# 시군구별 집계
+# 2. 시군구별 집계 (필터링된 filtered를 바탕으로 집계)
 # ---------------------------------------------------------------------
 counts = (
     filtered.dropna(subset=["geo_id"])
@@ -846,7 +855,6 @@ counts = (
     .rename(columns={"size": "의료기관수"})
 )
 
-# 전체 의료기관 수
 total_count = len(filtered)
 sgg_count = int(filtered["geo_id"].dropna().nunique())
 
