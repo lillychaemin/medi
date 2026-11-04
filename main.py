@@ -986,7 +986,6 @@ if not counts.empty:
 st.subheader("📋 선택 지역 병원 목록")
 st.caption("사이드바에서 선택한 지역과 조건에 해당하는 병원 상세 정보입니다.")
 
-# 엑셀/CSV에 존재하는 컬럼 중 유용한 정보만 추출
 display_cols = [
     c for c in [
         "요양기관명", "종별코드명", "시도코드명", "시군구코드명", 
@@ -1009,31 +1008,9 @@ else:
     st.info("선택한 조건에 해당하는 병원이 없습니다.")
 
 # ---------------------------------------------------------------------
-# 시군구별 표
-# ---------------------------------------------------------------------
-with st.expander("📊 시군구별 의료기관 수 표 보기"):
-    geo_rows = []
-    for idx, feature in enumerate(map_geojson.get("features", [])):
-        props = feature.get("properties", {})
-        geo_rows.append({
-            "시군구": props.get("FULL_NM", f"시군구 {idx}"),
-            "의료기관 수": int(props.get("의료기관수", 0)),
-        })
-    table = pd.DataFrame(geo_rows).sort_values("의료기관 수", ascending=False)
-    st.dataframe(
-        table,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "의료기관 수": st.column_config.NumberColumn("의료기관 수", format="%d개")
-        },
-    )
-
-# ---------------------------------------------------------------------
 # 데이터 출처
 # ---------------------------------------------------------------------
 st.caption(
     "의료기관 원자료: 건강보험심사평가원 병원정보서비스(2026년 6월). "
-    "행정구역 경계: mapcn-kr 시군구 GeoJSON "
-    "(통계청 SGIS·행정안전부 자료, 2026년 7월 기준; CC BY 4.0)."
+    "행정구역 경계: MapCN-KR 시군구 GeoJSON."
 )
