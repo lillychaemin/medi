@@ -315,7 +315,6 @@ def build_map_geojson(geojson: dict, counts: pd.DataFrame, selected_sido: str, s
         sido_raw, sgg_raw = _feature_sido_and_name(props)
         norm_sido = normalize_sido_name(sido_raw)
         
-        # 필터 조건에 맞지 않는 지역은 아예 데이터를 지우거나 회색 처리
         is_visible = True
         if selected_sido != "전체" and norm_sido != normalize_sido_name(selected_sido):
             is_visible = False
@@ -329,7 +328,6 @@ def build_map_geojson(geojson: dict, counts: pd.DataFrame, selected_sido: str, s
             props["단계"] = level
             props["fill_color"] = COLORS[level - 1] if 1 <= level <= 5 else [30, 64, 175, 230]
         else:
-            # 선택되지 않은 구역은 회색으로 처리
             props["의료기관수"] = 0
             props["단계"] = 0
             props["fill_color"] = [235, 235, 235, 120]
@@ -417,18 +415,19 @@ counts = (
 total_count = len(filtered)
 sgg_count = int(filtered["geo_id"].dropna().nunique())
 
-col1, col2, col3 = st.cols(3)
+# 🛠️ [수정 완료] st.cols -> st.columns로 변경
+col1, col2, col3 = st.columns(3)
 col1.metric("의료기관 수", format_number(total_count) + "개")
 col2.metric("표시 시군구", format_number(sgg_count) + "곳")
 col3.metric("원자료 기관 수", format_number(len(hospitals)) + "개")
 
-# 🔍 [디버깅용 추가] 현재 화면에 매칭된 시군구 이름 확인하기
+# 🔍 디버깅용 시군구 목록 확인
 if not counts.empty:
     matched_sgg_names = [
         map_geojson["features"][int(gid)]["properties"].get("FULL_NM", "")
         for gid in counts["geo_id"]
     ]
-    st.caption(f"인식된 시군구 목록: {', ' .join(matched_sgg_names)}")
+    st.caption(f"인식된 시군구 목록: {', '.join(matched_sgg_names)}")
     
 # ---------------------------------------------------------------------
 # 지도 생성
