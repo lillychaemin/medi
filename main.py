@@ -402,9 +402,7 @@ with st.sidebar:
         """
     )
 
-# ---------------------------------------------------------------------
 # 시군구별 집계
-# ---------------------------------------------------------------------
 counts = (
     filtered.dropna(subset=["geo_id"])
     .groupby("geo_id", as_index=False)
@@ -412,6 +410,15 @@ counts = (
     .rename(columns={"size": "의료기관수"})
 )
 
+# ⭐ [추가] 특정 시군구를 선택했을 경우, 이름이 일치하는 geo_id만 남기기
+if selected_sgg != "전체":
+    valid_geo_ids = []
+    for idx, feature in enumerate(geojson.get("features", [])):
+        props = feature.get("properties", {})
+        _, sgg_raw = _feature_sido_and_name(props)
+        if normalize_sgg_name(sgg_raw) in sgg_aliases(selected_sgg):
+            valid_geo_ids.append(str(idx))
+    counts = counts[counts["geo_id"].isin(valid_geo_ids)]
 total_count = len(filtered)
 sgg_count = int(filtered["geo_id"].dropna().nunique())
 
