@@ -384,15 +384,9 @@ with st.sidebar:
     sgg_options = ["전체"] + sorted(filtered["시군구코드명"].dropna().unique().tolist())
     selected_sgg = st.selectbox("시군구", sgg_options)
 
-  sgg_options = ["전체"] + sorted(filtered["시군구코드명"].dropna().unique().tolist())
-    selected_sgg = st.selectbox("시군구", sgg_options)
-
     if selected_sgg != "전체":
-        # 1차: 텍스트 주소 기준 필터링
         filtered = filtered[filtered["시군구코드명"] == selected_sgg]
         
-        # 2차: 좌표 오차로 인해 다른 구의 geo_id가 섞이는 것을 방지하기 위해 
-        # 선택한 시군구 이름과 일치하는 지도 폴리곤(geo_id)만 정확히 추려냅니다.
         valid_geo_ids = []
         for idx, feature in enumerate(geojson.get("features", [])):
             props = feature.get("properties", {})
