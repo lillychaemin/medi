@@ -446,14 +446,6 @@ except Exception as e:
     st.error(f"지도 경계 연결 오류: {e}")
     st.stop()
 
-# 🔍 디버깅용 시군구 목록 확인
-if not counts.empty:
-    matched_sgg_names = [
-        map_geojson["features"][int(gid)]["properties"].get("FULL_NM", "")
-        for gid in counts["geo_id"]
-    ]
-    st.caption(f"인식된 시군구 목록: {', '.join(matched_sgg_names)}")
-    
 
 layer = pdk.Layer(
     "GeoJsonLayer",
